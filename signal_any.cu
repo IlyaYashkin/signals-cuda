@@ -63,22 +63,22 @@ int main()
 {
   size_t m_trans_size = BASE * sizeof(float);
 
-  float *signal_Re = (float*)malloc(m_trans_size);
-  float *signal_Im = (float*)malloc(m_trans_size);
+  float *host_signal_Re = (float*)malloc(m_trans_size);
+  float *host_signal_Im = (float*)malloc(m_trans_size);
 
   float *dev_signal_Re;
   float *dev_signal_Im;
 
   for (int i = 0; i < BASE; i++) {
     float rad = 2 * CUDART_PI * i / BASE;
-    signal_Im[i] = sin(rad);
-    signal_Re[i] = cos(rad);
+    host_signal_Im[i] = sin(rad);
+    host_signal_Re[i] = cos(rad);
   }
 
   cudaMalloc(&dev_signal_Re, m_trans_size);
   cudaMalloc(&dev_signal_Im, m_trans_size);
-  cudaMemcpy(dev_signal_Re, signal_Re, m_trans_size, cudaMemcpyHostToDevice);
-  cudaMemcpy(dev_signal_Im, signal_Im, m_trans_size, cudaMemcpyHostToDevice);
+  cudaMemcpy(dev_signal_Re, host_signal_Re, m_trans_size, cudaMemcpyHostToDevice);
+  cudaMemcpy(dev_signal_Im, host_signal_Im, m_trans_size, cudaMemcpyHostToDevice);
 
 
   unsigned long num_combinations = pow(BASE, N) - 2;
@@ -120,7 +120,11 @@ int main()
   printf("best signal: %d\n", result + 1);
 
   free(host_c);
+  free(host_signal_Re);
+  free(host_signal_Im);
   cudaFree(dev_c);
+  cudaFree(dev_signal_Re);
+  cudaFree(dev_signal_Im);
 
   return 0;
 }
