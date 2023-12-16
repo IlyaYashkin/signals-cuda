@@ -43,8 +43,6 @@ __global__ void kernel(float *c)
 
   float akf = sqrtf(sum_Re * sum_Re + sum_Im * sum_Im);
 
-  akf = abs(akf);
-
   atomicMaxFloat(&max, akf);
 
   if (threadIdx.x != 1) {
