@@ -7,9 +7,13 @@
 
 using namespace std;
 
-#define N 14
-#define PHASE 90
+#define N 15
+#define PHASE 45
 #define BASE (360 / PHASE)
+
+/* size in bytes */
+#define BATCH_SIZE 6442450944
+#define BATCH BATCH_SIZE / sizeof(float)
 
 __device__ __forceinline__ float atomicMaxFloat(float* addr, float value) {
     float old;
@@ -21,13 +25,23 @@ __device__ __forceinline__ float atomicMaxFloat(float* addr, float value) {
 
 __global__ void kernel(
   float *c,
-  float *signal_Re,
-  float *signal_Im
+  unsigned long long offset
   )
 {
+  __shared__ float signal_Re[BASE];
+  __shared__ float signal_Im[BASE];
+
+  if (threadIdx.x < BASE) {
+    float rad = 2 * CUDART_PI * threadIdx.x / BASE;
+    signal_Re[threadIdx.x] = sinf(rad);
+    signal_Im[threadIdx.x] = cosf(rad);
+  }
+
+  __syncthreads();
+
   __shared__ char signal[N];
 
-  int signal_part = blockIdx.x + 1;
+  unsigned long long signal_part = blockIdx.x + offset + 1;
 
   for (int i = 0; i < threadIdx.x; i++) {
     if (signal_part == 0) { break; }
@@ -41,7 +55,7 @@ __global__ void kernel(
   }
 
   __shared__ float max;
-  max = 0.0;
+  max = 0;
 
   float sum_Re = 0;
   float sum_Im = 0;
@@ -63,46 +77,25 @@ __global__ void kernel(
   c[blockIdx.x] = max;
 }
 
-int main()
+unsigned long long start_kernel(
+  unsigned long long offset
+  )
 {
-  size_t m_trans_size = BASE * sizeof(float);
-
-  float *host_signal_Re = (float*)malloc(m_trans_size);
-  float *host_signal_Im = (float*)malloc(m_trans_size);
-
-  float *dev_signal_Re;
-  float *dev_signal_Im;
-
-  for (int i = 0; i < BASE; i++) {
-    float rad = 2 * CUDART_PI * i / BASE;
-    host_signal_Im[i] = sin(rad);
-    host_signal_Re[i] = cos(rad);
-  }
-
-  cudaMalloc(&dev_signal_Re, m_trans_size);
-  cudaMalloc(&dev_signal_Im, m_trans_size);
-  cudaMemcpy(dev_signal_Re, host_signal_Re, m_trans_size, cudaMemcpyHostToDevice);
-  cudaMemcpy(dev_signal_Im, host_signal_Im, m_trans_size, cudaMemcpyHostToDevice);
-
-  unsigned long num_combinations = pow(BASE, N) - 2;
-
-  size_t size = num_combinations * sizeof(float);
-
-  float *host_c = (float*)malloc(size);
+  float *host_c = (float*)malloc(BATCH_SIZE);
   float host_akf;
 
   float *dev_c;
 
-  cudaMalloc(&dev_c, size);
+  cudaMalloc(&dev_c, BATCH_SIZE);
   
   int threadsPerBlock = N;
-  unsigned long blocksInGrid = num_combinations;
+  unsigned long blocksInGrid = BATCH;
 
   cudaEvent_t start, stop;
 
   cudaEventCreate(&start);
   cudaEventRecord(start, 0);
-  kernel<<< blocksInGrid, threadsPerBlock >>>(dev_c, dev_signal_Re, dev_signal_Im);
+  kernel<<< blocksInGrid, threadsPerBlock >>>(dev_c, offset);
   cudaEventCreate(&stop);
   cudaEventRecord(stop, 0);
   cudaEventSynchronize(stop);
@@ -111,14 +104,9 @@ int main()
   cudaEventElapsedTime(&t, start, stop);
   printf("gpu time: %f\n", t);
 
-  free(host_signal_Re);
-  free(host_signal_Im);
-  cudaFree(dev_signal_Re);
-  cudaFree(dev_signal_Im);
-
   cudaEventCreate(&start);
   cudaEventRecord(start, 0);
-  int result = thrust::min_element(thrust::device, dev_c, dev_c + num_combinations) - dev_c;
+  unsigned long long result = thrust::min_element(thrust::device, dev_c, dev_c + BATCH) - dev_c;
   cudaEventCreate(&stop);
   cudaEventRecord(stop, 0);
   cudaEventSynchronize(stop);
@@ -128,12 +116,49 @@ int main()
   cudaEventElapsedTime(&t, start, stop);
   printf("thrust::min_element time: %f\n", t);
 
-  printf("index: %d\n", result);
-  printf("best signal: %d\n", result + 1);
+  printf("index: %zd\n", result + offset);
+  printf("best signal: %zd\n", result + offset + 1);
   printf("akf: %f\n", host_akf);
 
   free(host_c);
   cudaFree(dev_c);
 
   return 0;
+}
+
+unsigned long long get_num_combinations()
+{
+  unsigned long long num_combinations = BASE;
+
+  for (int i = 0; i < N; i++) {
+    num_combinations = num_combinations * BASE;
+  }
+
+  return num_combinations;
+}
+
+int main()
+{
+  unsigned long long num_combinations = get_num_combinations();
+  size_t size = num_combinations * sizeof(float);
+
+  if (size <= 0) {
+    cout << "result array size error" << endl;
+    return 1;
+  }
+
+  unsigned long num_batches = size / BATCH_SIZE;
+  num_batches = num_batches ? num_batches : 1;
+
+  printf("BATCH COUNT: %ld\n", num_batches);
+
+  // unsigned long long result;
+
+  for (unsigned long i = 0; i < num_batches; i++) {
+    unsigned long long offset = i * BATCH;
+
+    printf("\n --- BATCH %d --- \n\n", i + 1);
+
+    unsigned long long batch_result = start_kernel(offset);
+  }
 }

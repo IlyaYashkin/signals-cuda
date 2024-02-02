@@ -7,7 +7,7 @@
 
 using namespace std;
 
-#define N 6
+#define N 10
 
 __device__ __forceinline__ float atomicMaxFloat(float* addr, float value) {
     float old;
@@ -80,9 +80,17 @@ int main()
   cudaEventElapsedTime(&t, start, stop);
   printf("gpu time: %f\n", t);
 
+  float host_akf;
+
   cudaEventCreate(&start);
   cudaEventRecord(start, 0);
-  int result = thrust::min_element(thrust::device, dev_c, dev_c + num_combinations) - dev_c;
+  
+  float *min_element_ptr = thrust::min_element(thrust::device, dev_c, dev_c + num_combinations);
+
+  unsigned long long result = min_element_ptr - dev_c;
+
+  cudaMemcpy(&host_akf, dev_c + result, sizeof(float), cudaMemcpyDeviceToHost);
+
   cudaEventCreate(&stop);
   cudaEventRecord(stop, 0);
   cudaEventSynchronize(stop);
@@ -90,7 +98,8 @@ int main()
   cudaEventElapsedTime(&t, start, stop);
   printf("thrust::min_element time: %f\n", t);
 
-  printf("best signal: %d\n", result + 1);
+  printf("best signal: %zd\n", result + 1);
+  printf("akf: %f\n", host_akf);
 
   free(host_c);
   cudaFree(dev_c);
