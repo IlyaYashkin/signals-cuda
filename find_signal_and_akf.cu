@@ -5,10 +5,11 @@
 
 using namespace std;
 
-#define N 15
-#define PHASE 45
+#define N 10
+#define PHASE 180
 #define BASE (360 / PHASE)
-#define SIGNAL 10544233731
+#define SIGNAL 26
+
 
 int main()
 {
@@ -21,8 +22,8 @@ int main()
 
   for (int i = 0; i < BASE; i++) {
     float rad = 2 * atan(1.0) * 4 * i / BASE;
-    signal_Im[i] = sin(rad);
     signal_Re[i] = cos(rad);
+    signal_Im[i] = sin(rad);
   }
 
   for (int i = 0; i < N; i++) {
@@ -33,7 +34,9 @@ int main()
       signal_part /= BASE;
     }
     signal[i] = signal_part % BASE;
+    cout << signal[i];
   }
+  cout << endl;
 
   float akf[N];
   for (int i = 0; i < N; i++) {
@@ -46,7 +49,7 @@ int main()
       sum_Im += signal_Im[idx];
     }
 
-    akf[i] = sqrtf(sum_Re * sum_Re + sum_Im * sum_Im);
+    akf[i] = sqrt(sum_Re * sum_Re + sum_Im * sum_Im);
     cout << akf[i] << ' ';
   }
   cout << endl;

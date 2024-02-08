@@ -1,13 +1,12 @@
 #include <iostream>
 #include <stdio.h>
 #include <cmath>
-#include "./akfuncdemo/akfuncdemo.h"
 
 #include <thrust/extrema.h>
 
 using namespace std;
 
-#define N 5
+#define N 10
 
 __global__ void kernel(unsigned short *c)
 {
@@ -39,8 +38,6 @@ __global__ void kernel(unsigned short *c)
 
 int main()
 {
-  ak_func_demo_test();
-
   unsigned long num_combinations = pow(2, N) - 2;
 
   size_t size = num_combinations * sizeof(short);

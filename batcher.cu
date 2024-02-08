@@ -7,8 +7,8 @@
 
 using namespace std;
 
-#define N 15
-#define PHASE 45
+#define N 60
+#define PHASE 180
 #define BASE (360 / PHASE)
 
 /* size in bytes */
@@ -33,15 +33,15 @@ __global__ void kernel(
 
   if (threadIdx.x < BASE) {
     float rad = 2 * CUDART_PI * threadIdx.x / BASE;
-    signal_Re[threadIdx.x] = sinf(rad);
-    signal_Im[threadIdx.x] = cosf(rad);
+    signal_Re[threadIdx.x] = cos(rad);
+    signal_Im[threadIdx.x] = sin(rad);
   }
 
   __syncthreads();
 
   __shared__ char signal[N];
 
-  unsigned long long signal_part = blockIdx.x + offset + 1;
+  unsigned long long signal_part = blockIdx.x + offset;
 
   for (int i = 0; i < threadIdx.x; i++) {
     if (signal_part == 0) { break; }
@@ -50,6 +50,8 @@ __global__ void kernel(
 
   signal[threadIdx.x] = signal_part % BASE;
 
+  __syncthreads();
+
   if (threadIdx.x == 0) {
     return;
   }
@@ -57,8 +59,8 @@ __global__ void kernel(
   __shared__ float max;
   max = 0;
 
-  float sum_Re = 0;
-  float sum_Im = 0;
+  float sum_Re = 0.0;
+  float sum_Im = 0.0;
   for (int i = 0; i + threadIdx.x < N; i++) {
     int idx = (BASE + signal[i] - signal[threadIdx.x + i]) % BASE;
 
@@ -78,18 +80,21 @@ __global__ void kernel(
 }
 
 unsigned long long start_kernel(
-  unsigned long long offset
+  unsigned long long offset,
+  unsigned long long batch
   )
 {
-  float *host_c = (float*)malloc(BATCH_SIZE);
+  unsigned long long batch_size = batch * sizeof(float);
+
+  float *host_c = (float*)malloc(batch_size);
   float host_akf;
 
   float *dev_c;
 
-  cudaMalloc(&dev_c, BATCH_SIZE);
+  cudaMalloc(&dev_c, batch_size);
   
   int threadsPerBlock = N;
-  unsigned long blocksInGrid = BATCH;
+  unsigned long long blocksInGrid = batch;
 
   cudaEvent_t start, stop;
 
@@ -106,7 +111,7 @@ unsigned long long start_kernel(
 
   cudaEventCreate(&start);
   cudaEventRecord(start, 0);
-  unsigned long long result = thrust::min_element(thrust::device, dev_c, dev_c + BATCH) - dev_c;
+  unsigned long long result = thrust::min_element(thrust::device, dev_c, dev_c + batch) - dev_c;
   cudaEventCreate(&stop);
   cudaEventRecord(stop, 0);
   cudaEventSynchronize(stop);
@@ -116,8 +121,7 @@ unsigned long long start_kernel(
   cudaEventElapsedTime(&t, start, stop);
   printf("thrust::min_element time: %f\n", t);
 
-  printf("index: %zd\n", result + offset);
-  printf("best signal: %zd\n", result + offset + 1);
+  printf("best signal: %zd\n", result + offset);
   printf("akf: %f\n", host_akf);
 
   free(host_c);
@@ -147,18 +151,24 @@ int main()
     return 1;
   }
 
-  unsigned long num_batches = size / BATCH_SIZE;
-  num_batches = num_batches ? num_batches : 1;
+  unsigned long long num_batches = ceil((double) size / BATCH_SIZE);
 
-  printf("BATCH COUNT: %ld\n", num_batches);
+  printf("BATCH COUNT: %lld\n", num_batches);
+
+  unsigned long long start_from = 0;
+  // unsigned long long start_from = 1031655766;
 
   // unsigned long long result;
 
-  for (unsigned long i = 0; i < num_batches; i++) {
+  for (unsigned long long i = start_from; i < num_batches; i++) {
     unsigned long long offset = i * BATCH;
 
-    printf("\n --- BATCH %d --- \n\n", i + 1);
+    long long comp = (num_combinations - (offset + BATCH));
 
-    unsigned long long batch_result = start_kernel(offset);
+    unsigned long long batch = comp < 0 ? num_combinations - offset : BATCH;
+
+    printf("\n --- BATCH %lld --- \n\n", i + 1);
+
+    unsigned long long batch_result = start_kernel(offset, batch);
   }
 }
