@@ -7,9 +7,11 @@
 
 using namespace std;
 
-#define N 60
-#define PHASE 180
+#define N 11
+#define PHASE 30
 #define BASE (360 / PHASE)
+
+#define TRANSFORM_MATRIX_ITERATIONS_NUMBER ceil((float) BASE / (float) N)
 
 /* size in bytes */
 #define BATCH_SIZE 6442450944
@@ -31,10 +33,14 @@ __global__ void kernel(
   __shared__ float signal_Re[BASE];
   __shared__ float signal_Im[BASE];
 
-  if (threadIdx.x < BASE) {
-    float rad = 2 * CUDART_PI * threadIdx.x / BASE;
-    signal_Re[threadIdx.x] = cos(rad);
-    signal_Im[threadIdx.x] = sin(rad);
+  for (int i = 0; i < TRANSFORM_MATRIX_ITERATIONS_NUMBER; i++) {
+    int idx = threadIdx.x + i * N;
+
+    if (idx > BASE - 1) { break; }
+
+    float rad = 2 * CUDART_PI * idx / BASE;
+    signal_Re[idx] = cosf(rad);
+    signal_Im[idx] = sinf(rad);
   }
 
   __syncthreads();
@@ -167,7 +173,7 @@ int main()
 
     unsigned long long batch = comp < 0 ? num_combinations - offset : BATCH;
 
-    printf("\n --- BATCH %lld --- \n\n", i + 1);
+    printf("\n --- BATCH %lld --- \n\n", i);
 
     unsigned long long batch_result = start_kernel(offset, batch);
   }
