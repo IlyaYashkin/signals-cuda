@@ -23,32 +23,26 @@ typedef float2 Complex;
 
 __device__ Complex multiplyComplex(Complex first, Complex second)
 {
-  Complex result = {
+  return Complex {
     first.x * second.x - first.y * second.y,
     first.x * second.y + first.y * second.x
   };
-
-  return result;
 }
 
 __device__ Complex sumComplex(Complex first, Complex second)
 {
-  Complex result = {
+  return Complex {
     first.x + second.x,
     first.y + second.y
   };
-
-  return result;
 }
 
 __device__ Complex subComplex(Complex first, Complex second)
 {
-  Complex result = {
+  return Complex {
     first.x - second.x,
     first.y - second.y
   };
-
-  return result;
 }
 
 __device__ float absComplex(Complex num)
@@ -297,27 +291,6 @@ unsigned long long start_kernel(
 
   return 0;
 }
-
-// int main()
-// {
-//   unsigned int signalSize = upperPowerOfTwo(N) * 2;
-//   unsigned int bitCount = bitCount_(signalSize);
-
-//   cudaEvent_t start, stop;
-
-//   cudaEventCreate(&start);
-//   cudaEventRecord(start, 0);
-//   kernel<<< 1, signalSize / 2, signalSize * sizeof(Complex) >>>(signalSize, bitCount);
-//   cudaEventCreate(&stop);
-//   cudaEventRecord(stop, 0);
-//   cudaEventSynchronize(stop);
-//   float t;
-
-//   cudaEventElapsedTime(&t, start, stop);
-//   printf("gpu time: %f\n", t);
-
-//   return 0;
-// }
 
 unsigned long long getNumCombinations()
 {
