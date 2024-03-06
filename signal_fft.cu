@@ -9,11 +9,9 @@ using namespace std;
 
 typedef float2 Complex;
 
-#define N 60
-#define PHASE 180
+#define N 15
+#define PHASE 45
 #define BASE (360 / PHASE)
-
-#define SIGNAL_TEST 23
 
 #define TRANSITION_MATRIX_ITERATIONS_NUMBER ceil((float) BASE / (float) N)
 
