@@ -8,7 +8,7 @@ using namespace std;
 #define N 10
 #define PHASE 180
 #define BASE (360 / PHASE)
-#define SIGNAL 26
+#define SIGNAL 815
 
 
 int main()
@@ -34,7 +34,8 @@ int main()
       signal_part /= BASE;
     }
     signal[i] = signal_part % BASE;
-    cout << signal[i];
+
+    cout << signal_Re[signal[i]] << " " << signal_Im[signal[i]] << endl;
   }
   cout << endl;
 

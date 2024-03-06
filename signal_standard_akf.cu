@@ -7,17 +7,20 @@
 
 using namespace std;
 
-#define N 11
-#define PHASE 30
+typedef float2 Complex;
+
+#define N 60
+#define PHASE 180
 #define BASE (360 / PHASE)
 
-#define TRANSFORM_MATRIX_ITERATIONS_NUMBER ceil((float) BASE / (float) N)
+#define TRANSITION_MATRIX_ITERATIONS_NUMBER ceil((float) BASE / (float) N)
 
 /* size in bytes */
 #define BATCH_SIZE 6442450944
 #define BATCH BATCH_SIZE / sizeof(float)
 
-__device__ __forceinline__ float atomicMaxFloat(float* addr, float value) {
+__device__ __forceinline__ float atomicMaxFloat(float* addr, float value)
+{
     float old;
     old = !signbit(value) ? __int_as_float(atomicMax((int*)addr, __float_as_int(value))) :
         __uint_as_float(atomicMin((unsigned int*)addr, __float_as_uint(value)));
@@ -25,28 +28,25 @@ __device__ __forceinline__ float atomicMaxFloat(float* addr, float value) {
     return old;
 }
 
-__global__ void kernel(
-  float *c,
-  unsigned long long offset
-  )
+__device__ void getTransitionMatrix(Complex* transition_matrix)
 {
-  __shared__ float signal_Re[BASE];
-  __shared__ float signal_Im[BASE];
-
-  for (int i = 0; i < TRANSFORM_MATRIX_ITERATIONS_NUMBER; i++) {
+  for (int i = 0; i < TRANSITION_MATRIX_ITERATIONS_NUMBER; i++) {
     int idx = threadIdx.x + i * N;
 
     if (idx > BASE - 1) { break; }
 
     float rad = 2 * CUDART_PI * idx / BASE;
-    signal_Re[idx] = cosf(rad);
-    signal_Im[idx] = sinf(rad);
+    transition_matrix[idx].x = cosf(rad);
+    transition_matrix[idx].y = sinf(rad);
   }
+}
 
-  __syncthreads();
-
-  __shared__ char signal[N];
-
+__device__ void getSignal(
+  Complex* signal,
+  Complex* transition_matrix,
+  unsigned long long offset
+)
+{
   unsigned long long signal_part = blockIdx.x + offset;
 
   for (int i = 0; i < threadIdx.x; i++) {
@@ -54,7 +54,40 @@ __global__ void kernel(
     signal_part /= BASE;
   }
 
-  signal[threadIdx.x] = signal_part % BASE;
+  unsigned int t_idx = signal_part % BASE;
+
+  signal[threadIdx.x].x = transition_matrix[t_idx].x;
+  signal[threadIdx.x].y = transition_matrix[t_idx].y;
+}
+
+__device__ float findAkf(Complex* signal)
+{
+  Complex sum = {0.0, 0.0};
+
+  for (int i = 0; i + threadIdx.x < N; i++) {
+    sum.x += signal[threadIdx.x + i].x * signal[i].x - signal[threadIdx.x + i].y * -signal[i].y;
+    sum.y += signal[threadIdx.x + i].x * -signal[i].y + signal[threadIdx.x + i].y * signal[i].x;
+  }
+
+  return sqrtf(sum.x * sum.x + sum.y * sum.y);
+}
+
+__global__ void kernel(
+  float *c,
+  unsigned long long offset
+  )
+{
+  if (threadIdx.x >= N) { return; }
+
+  __shared__ Complex transition_matrix[BASE];
+
+  getTransitionMatrix(transition_matrix);
+
+  __syncthreads();
+
+  __shared__ Complex signal[N];
+
+  getSignal(signal, transition_matrix, offset);
 
   __syncthreads();
 
@@ -62,19 +95,10 @@ __global__ void kernel(
     return;
   }
 
+  float akf = findAkf(signal);
+
   __shared__ float max;
   max = 0;
-
-  float sum_Re = 0.0;
-  float sum_Im = 0.0;
-  for (int i = 0; i + threadIdx.x < N; i++) {
-    int idx = (BASE + signal[i] - signal[threadIdx.x + i]) % BASE;
-
-    sum_Re += signal_Re[idx];
-    sum_Im += signal_Im[idx];
-  }
-
-  float akf = sqrtf(sum_Re * sum_Re + sum_Im * sum_Im);
 
   atomicMaxFloat(&max, akf);
 
@@ -83,6 +107,19 @@ __global__ void kernel(
   }
 
   c[blockIdx.x] = max;
+}
+
+unsigned long upperPowerOfTwo(unsigned long v)
+{
+    v--;
+    v |= v >> 1;
+    v |= v >> 2;
+    v |= v >> 4;
+    v |= v >> 8;
+    v |= v >> 16;
+    v++;
+    return v;
+
 }
 
 unsigned long long start_kernel(
@@ -99,7 +136,7 @@ unsigned long long start_kernel(
 
   cudaMalloc(&dev_c, batch_size);
   
-  int threadsPerBlock = N;
+  int threadsPerBlock = upperPowerOfTwo(N);
   unsigned long long blocksInGrid = batch;
 
   cudaEvent_t start, stop;
@@ -136,7 +173,7 @@ unsigned long long start_kernel(
   return 0;
 }
 
-unsigned long long get_num_combinations()
+unsigned long long getNumCombinations()
 {
   unsigned long long num_combinations = BASE;
 
@@ -149,7 +186,7 @@ unsigned long long get_num_combinations()
 
 int main()
 {
-  unsigned long long num_combinations = get_num_combinations();
+  unsigned long long num_combinations = getNumCombinations();
   size_t size = num_combinations * sizeof(float);
 
   if (size <= 0) {
@@ -162,9 +199,6 @@ int main()
   printf("BATCH COUNT: %lld\n", num_batches);
 
   unsigned long long start_from = 0;
-  // unsigned long long start_from = 1031655766;
-
-  // unsigned long long result;
 
   for (unsigned long long i = start_from; i < num_batches; i++) {
     unsigned long long offset = i * BATCH;
