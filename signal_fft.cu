@@ -124,7 +124,7 @@ __device__ void getSignal(
 
 
 
-__device__ void myFFT(Complex* signal, unsigned int bitCount, int direction = -1)
+__device__ void fft(Complex* signal, unsigned int bitCount, int direction = -1)
 {
   unsigned int j = reverseBits(threadIdx.x, bitCount);
 
@@ -205,13 +205,13 @@ __global__ void kernel
 
   __syncthreads();
 
-  myFFT(signal, bitCount);
+  fft(signal, bitCount);
 
   multiplyConj(signal);
 
   __syncthreads();
 
-  myFFT(signal, bitCount, 1);
+  fft(signal, bitCount, 1);
 
   signal[threadIdx.x].x = absComplex(signal[threadIdx.x + 1]) / (blockDim.x * 2);
 
