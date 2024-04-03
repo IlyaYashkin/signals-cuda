@@ -1,6 +1,7 @@
 #include <iostream>
+#include <inttypes.h>
 #include <stdio.h>
-#include <cmath>
+#include <math.h>
 #include "math_constants.h"
 
 #include <thrust/extrema.h>
@@ -9,24 +10,15 @@ using namespace std;
 
 typedef float2 Complex;
 
-#define N 60
+#define N 61
 #define PHASE 180
 #define BASE (360 / PHASE)
 
-#define TRANSITION_MATRIX_ITERATIONS_NUMBER ceil((float) BASE / (float) N)
+#define TRANSITION_MATRIX_ITERATIONS_NUMBER (int) ceilf((float) BASE / (float) N)
 
 /* size in bytes */
-#define BATCH_SIZE 6442450944
-#define BATCH BATCH_SIZE / sizeof(float)
-
-__device__ __forceinline__ float atomicMaxFloat(float* addr, float value)
-{
-    float old;
-    old = !signbit(value) ? __int_as_float(atomicMax((int*)addr, __float_as_int(value))) :
-        __uint_as_float(atomicMin((unsigned int*)addr, __float_as_uint(value)));
-
-    return old;
-}
+#define CHUNK_SIZE_IN_BYTES 6442450944
+#define CHUNK_SIZE CHUNK_SIZE_IN_BYTES / sizeof(float)
 
 __device__ void getTransitionMatrix(Complex* transition_matrix)
 {
@@ -36,6 +28,7 @@ __device__ void getTransitionMatrix(Complex* transition_matrix)
     if (idx > BASE - 1) { break; }
 
     float rad = 2 * CUDART_PI * idx / BASE;
+
     transition_matrix[idx].x = cosf(rad);
     transition_matrix[idx].y = sinf(rad);
   }
@@ -44,17 +37,19 @@ __device__ void getTransitionMatrix(Complex* transition_matrix)
 __device__ void getSignal(
   Complex* signal,
   Complex* transition_matrix,
-  unsigned long long offset
+  uint64_t offset
 )
 {
-  unsigned long long signal_part = blockIdx.x + offset;
+  if (threadIdx.x >= N) { return; }
 
-  for (int i = 0; i < threadIdx.x; i++) {
+  uint64_t signal_part = blockIdx.x + offset;
+
+  for (int i = 0; i < threadIdx.x && threadIdx.x < N; i++) {
     if (signal_part == 0) { break; }
     signal_part /= BASE;
   }
 
-  unsigned int t_idx = signal_part % BASE;
+  uint32_t t_idx = signal_part % BASE;
 
   signal[threadIdx.x].x = transition_matrix[t_idx].x;
   signal[threadIdx.x].y = transition_matrix[t_idx].y;
@@ -72,13 +67,26 @@ __device__ float findAkf(Complex* signal)
   return sqrtf(sum.x * sum.x + sum.y * sum.y);
 }
 
+__device__ void reduceMax(Complex* signal)
+{
+  uint32_t i = blockDim.x / 2;
+
+  while (i != 0) {
+    if (threadIdx.x <= i && threadIdx.x + i < N) {
+      signal[threadIdx.x].x = fmaxf(signal[threadIdx.x].x, signal[threadIdx.x + i].x);
+    }
+
+    __syncthreads();
+
+    i /= 2;
+  }
+}
+
 __global__ void kernel(
   float *c,
-  unsigned long long offset
+  uint64_t offset
   )
 {
-  if (threadIdx.x >= N) { return; }
-
   __shared__ Complex transition_matrix[BASE];
 
   getTransitionMatrix(transition_matrix);
@@ -91,25 +99,32 @@ __global__ void kernel(
 
   __syncthreads();
 
-  if (threadIdx.x == 0) {
+  float akf = 0;
+
+  if (threadIdx.x != 0) {
+    akf = findAkf(signal);
+  }
+
+  __syncthreads();
+
+  if (threadIdx.x < N) {
+    signal[threadIdx.x].x = akf;
+  }
+
+  __syncthreads();
+
+  reduceMax(signal);
+
+  __syncthreads();
+
+  if (threadIdx.x != 0) {
     return;
   }
 
-  float akf = findAkf(signal);
-
-  __shared__ float max;
-  max = 0;
-
-  atomicMaxFloat(&max, akf);
-
-  if (threadIdx.x != 1) {
-    return;
-  }
-
-  c[blockIdx.x] = max;
+  c[blockIdx.x] = signal[0].x;
 }
 
-unsigned long upperPowerOfTwo(unsigned long v)
+uint32_t upperPowerOfTwo(uint32_t v)
 {
     v--;
     v |= v >> 1;
@@ -122,22 +137,22 @@ unsigned long upperPowerOfTwo(unsigned long v)
 
 }
 
-unsigned long long start_kernel(
-  unsigned long long offset,
-  unsigned long long batch
+uint64_t start_kernel(
+  uint64_t offset,
+  uint64_t chunk_size
   )
 {
-  unsigned long long batch_size = batch * sizeof(float);
+  uint64_t chunk_size_m = chunk_size * sizeof(float);
 
-  float *host_c = (float*)malloc(batch_size);
+  float *host_c = (float*)malloc(chunk_size_m);
   float host_akf;
 
   float *dev_c;
 
-  cudaMalloc(&dev_c, batch_size);
+  cudaMalloc(&dev_c, chunk_size_m);
   
   int threadsPerBlock = upperPowerOfTwo(N);
-  unsigned long long blocksInGrid = batch;
+  uint64_t blocksInGrid = chunk_size;
 
   cudaEvent_t start, stop;
 
@@ -154,7 +169,7 @@ unsigned long long start_kernel(
 
   cudaEventCreate(&start);
   cudaEventRecord(start, 0);
-  unsigned long long result = thrust::min_element(thrust::device, dev_c, dev_c + batch) - dev_c;
+  uint64_t result = thrust::min_element(thrust::device, dev_c, dev_c + chunk_size) - dev_c;
   cudaEventCreate(&stop);
   cudaEventRecord(stop, 0);
   cudaEventSynchronize(stop);
@@ -164,7 +179,7 @@ unsigned long long start_kernel(
   cudaEventElapsedTime(&t, start, stop);
   printf("thrust::min_element time: %f\n", t);
 
-  printf("best signal: %zd\n", result + offset);
+  cout << "best signal: " << result + offset << endl;
   printf("akf: %f\n", host_akf);
 
   free(host_c);
@@ -173,42 +188,43 @@ unsigned long long start_kernel(
   return 0;
 }
 
-unsigned long long getNumCombinations()
+uint64_t getCombinationsCount()
 {
-  unsigned long long num_combinations = BASE;
+  uint64_t combinations_count = BASE;
 
   for (int i = 0; i < N; i++) {
-    num_combinations = num_combinations * BASE;
+    combinations_count = combinations_count * BASE;
   }
 
-  return num_combinations;
+  return combinations_count;
 }
 
 int main()
 {
-  unsigned long long num_combinations = getNumCombinations();
-  size_t size = num_combinations * sizeof(float);
+  uint64_t combinations_count = getCombinationsCount();
+  uint64_t chunk_size = CHUNK_SIZE_IN_BYTES / sizeof(float);
 
-  if (size <= 0) {
-    cout << "result array size error" << endl;
+  if (combinations_count <= 0) {
+    printf("result array size error\n");
     return 1;
   }
 
-  unsigned long long num_batches = ceil((double) size / BATCH_SIZE);
+  uint64_t chunks_count = 
+    combinations_count < chunk_size ? 1 : combinations_count / chunk_size;
 
-  printf("BATCH COUNT: %lld\n", num_batches);
+  cout << "CHUNKS COUNT: " << chunks_count << endl;
 
-  unsigned long long start_from = 0;
+  uint64_t start_from = 1031655765;
 
-  for (unsigned long long i = start_from; i < num_batches; i++) {
-    unsigned long long offset = i * BATCH;
+  for (uint64_t i = start_from; i < chunks_count; i++) {
+    uint64_t offset = i * chunk_size;
 
-    long long comp = (num_combinations - (offset + BATCH));
+    int64_t comp = (combinations_count - (offset + chunk_size));
 
-    unsigned long long batch = comp < 0 ? num_combinations - offset : BATCH;
+    uint64_t residual_chunk_size = comp < 0 ? combinations_count - offset : chunk_size;
 
-    printf("\n --- BATCH %lld --- \n\n", i);
+    printf("\n --- CHUNK %" PRIu64 " --- \n\n", i);
 
-    unsigned long long batch_result = start_kernel(offset, batch);
+    start_kernel(offset, residual_chunk_size);
   }
 }
