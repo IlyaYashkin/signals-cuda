@@ -7,25 +7,23 @@
 
 #include "utils/calc.h"
 #include "utils/error.h"
+#include "signal/signal.h"
 
 using namespace std;
-
-typedef float2 Complex;
 
 #define N 30
 #define PHASE 180
 #define BASE (360 / PHASE)
 
-#define TRANSITION_MATRIX_ITERATIONS_NUMBER (int) ceilf((float) BASE / (float) N)
-
 /* size in bytes */
 #define CHUNK_SIZE_IN_BYTES 6442450944
-#define CHUNK_SIZE CHUNK_SIZE_IN_BYTES / sizeof(float)
 
 uint64_t start_kernel(
   uint64_t offset,
-  uint64_t chunk_size
-  )
+  uint64_t chunk_size,
+  uint32_t signal_size,
+  uint32_t base
+)
 {
   uint64_t chunk_size_m = chunk_size * sizeof(float);
 
@@ -35,15 +33,20 @@ uint64_t start_kernel(
   float *dev_c;
 
   cudaMalloc(&dev_c, chunk_size_m);
+
+  size_t shared_memory_size = 
+    base * sizeof(float2) +         // transition matrix
+    signal_size * sizeof(float2) +  // signal array
+    signal_size * sizeof(float2);   // signal array (copy)
   
-  int threadsPerBlock = upperPowerOfTwo(N);
+  int threadsPerBlock = upperPowerOfTwo(signal_size);
   uint64_t blocksInGrid = chunk_size;
 
   cudaEvent_t start, stop;
 
   cudaEventCreate(&start);
   cudaEventRecord(start, 0);
-  kernel<<< blocksInGrid, threadsPerBlock >>>(dev_c, offset);
+  kernel_doppler<<< blocksInGrid, threadsPerBlock, shared_memory_size >>>(dev_c, offset, signal_size, base);
   cudaEventCreate(&stop);
   cudaEventRecord(stop, 0);
   cudaEventSynchronize(stop);
@@ -75,20 +78,18 @@ uint64_t start_kernel(
 
 int main()
 {
-  uint64_t combinations_count = getCombinationsCount();
+  uint64_t combinations_count = getCombinationsCount(N, BASE);
   uint64_t chunk_size = CHUNK_SIZE_IN_BYTES / sizeof(float);
+  uint32_t signal_size = N;
+  uint32_t base = BASE;
+  uint64_t start_from = 0;
 
-  if (combinations_count <= 0) {
-    printf("result array size error\n");
-    return 1;
-  }
+  if (checkOverflow(combinations_count)) { return 1; }
 
   uint64_t chunks_count = 
     combinations_count < chunk_size ? 1 : combinations_count / chunk_size;
 
   cout << "CHUNKS COUNT: " << chunks_count << endl;
-
-  uint64_t start_from = 0;
 
   for (uint64_t i = start_from; i < chunks_count; i++) {
     uint64_t offset = i * chunk_size;
@@ -99,8 +100,6 @@ int main()
 
     printf("\n --- CHUNK %" PRIu64 " --- \n\n", i);
 
-    start_kernel(offset, residual_chunk_size);
-
-    break;
+    start_kernel(offset, residual_chunk_size, signal_size, base);
   }
 }

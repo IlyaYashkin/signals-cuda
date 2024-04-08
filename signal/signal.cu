@@ -76,26 +76,6 @@ __device__ void reduceMax(
 
 
 /**
- * Поиск суммы элементов массива
-*/
-
-__device__ void reduceSum(float* arr)
-{
-  uint32_t i = blockDim.x / 2;
-
-  while (i != 0) {
-    if (threadIdx.x <= i && threadIdx.x + i < N) {
-      arr[threadIdx.x] += arr[threadIdx.x + i];
-    }
-
-    __syncthreads();
-
-    i /= 2;
-  }
-}
-
-
-/**
  * Поиск АКФ
 */
 
@@ -174,52 +154,77 @@ __global__ void kernel(
 
 
 /**
+ * Поиск суммы элементов массива
+*/
+
+__device__ void reduceSum(float2* arr, uint32_t signal_size)
+{
+  uint32_t i = blockDim.x / 2;
+
+  while (i != 0) {
+    if (threadIdx.x <= i && threadIdx.x + i < signal_size) {
+      arr[threadIdx.x].x += arr[threadIdx.x + i].x;
+    }
+
+    __syncthreads();
+
+    i /= 2;
+  }
+}
+
+
+/**
  * Поиск оптимального сигнала с заданным сдвигом Доплера
 */
 
 __global__ void kernel_doppler(
   float *c,
-  uint64_t offset
-  )
+  uint64_t offset,
+  uint32_t signal_size,
+  uint32_t base
+)
 {
-  __shared__ float2 transition_matrix[BASE];
+  extern __shared__ float2 s[];
 
-  getTransitionMatrix(transition_matrix);
+  float2 *transition_matrix = s;
 
-  __syncthreads();
-
-  __shared__ float2 signal[N];
-
-  getSignal(signal, transition_matrix, offset);
+  getTransitionMatrix(transition_matrix, signal_size, base);
 
   __syncthreads();
 
-  float akf = findAkf(signal);
+  float2 *signal = (float2*)&s[base];
+
+  getSignal(signal, transition_matrix, offset, signal_size, base);
 
   __syncthreads();
 
-  __shared__ float akf_copy[N];
+  float akf = findAkf(signal, signal_size);
 
-  if (threadIdx.x < N) {
+  __syncthreads();
+
+  float2 *akf_arr = (float2*)&s[base + signal_size];
+
+  if (threadIdx.x < signal_size) {
     signal[threadIdx.x].x = akf;
     signal[threadIdx.x].y = threadIdx.x;
 
-    akf_copy[threadIdx.x] = akf;
+    akf_arr[threadIdx.x].x = akf;
+    akf_arr[threadIdx.x].y = threadIdx.x;
   }
 
   __syncthreads();
 
-  reduceMax(signal);
+  reduceMax(signal, signal_size);
 
   __syncthreads();
 
   if (threadIdx.x == 0) {
-    akf_copy[(int) signal[0].y] = 0;
+    akf_arr[(int) signal[0].y].x = 0;
   }
   
   __syncthreads();
 
-  reduceSum(akf_copy);
+  reduceSum(akf_arr, signal_size);
 
   __syncthreads();
 
@@ -227,5 +232,5 @@ __global__ void kernel_doppler(
     return;
   }
 
-  c[blockIdx.x] = signal[0].x - akf_copy[0];
+  c[blockIdx.x] = signal[0].x - akf_arr[0].x;
 }
