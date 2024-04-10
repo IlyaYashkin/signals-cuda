@@ -1,8 +1,13 @@
 #include <iostream>
 #include <inttypes.h>
 #include <stdio.h>
+#include <unistd.h>
+
+#include <omp.h>
 
 #include <thrust/extrema.h>
+#include <thrust/device_ptr.h>
+#include <thrust/execution_policy.h>
 
 #include "utils/calc.h"
 #include "utils/error.h"
@@ -10,18 +15,18 @@
 
 using namespace std;
 
-#define N 10
-#define PHASE 90
+#define N 31
+#define PHASE 180
 #define BASE (360 / PHASE)
 
-#define CHUNK_SIZE_IN_BYTES 6442450944
+#define CHUNK_SIZE_IN_BYTES 5368709120
 
 uint64_t start_kernel(
   uint64_t offset,
   uint64_t chunk_size,
   uint32_t signal_size,
   uint32_t base
-  )
+)
 {
   uint64_t chunk_size_m = chunk_size * sizeof(float);
 
@@ -73,6 +78,42 @@ uint64_t start_kernel(
   return 0;
 }
 
+uint64_t getResidualChunkSize(uint64_t offset, uint64_t chunk_size, uint64_t combinations_count)
+{
+  int64_t comp = (combinations_count - (offset + chunk_size));
+  return comp < 0 ? combinations_count - offset : chunk_size;
+}
+
+uint64_t getOffset(uint64_t i, uint64_t chunk_size)
+{
+  return i * chunk_size;
+}
+
+float* start_kernel_async(
+  cudaStream_t stream,
+  uint64_t offset,
+  uint64_t chunk_size,
+  uint32_t signal_size,
+  uint32_t base
+)
+{
+  uint64_t chunk_size_m = chunk_size * sizeof(float);
+
+  float *dev_c;
+
+  cudaMallocAsync(&dev_c, chunk_size_m, stream);
+  
+  int threadsPerBlock = upperPowerOfTwo(signal_size);
+  uint64_t blocksInGrid = chunk_size;
+  size_t shared_memory_size = 
+    base * sizeof(float2) +        // transition matrix
+    signal_size * sizeof(float2);  // signal array
+
+  kernel<<< blocksInGrid, threadsPerBlock, shared_memory_size, stream >>>(dev_c, offset, signal_size, base);
+
+  return dev_c;
+}
+
 int main()
 {
   uint64_t combinations_count = getCombinationsCount(N, BASE);
@@ -83,20 +124,48 @@ int main()
 
   if (checkOverflow(combinations_count)) { return 1; }
 
-  uint64_t chunks_count = 
+  uint64_t chunk_count = 
     combinations_count < chunk_size ? 1 : combinations_count / chunk_size;
 
-  cout << "CHUNKS COUNT: " << chunks_count << endl;
+  cout << "CHUNKS COUNT: " << chunk_count << endl;
 
-  for (uint64_t i = start_from; i < chunks_count; i++) {
-    uint64_t offset = i * chunk_size;
+  int device_count;
+  cudaGetDeviceCount(&device_count);
+  omp_set_num_threads(device_count);
 
-    int64_t comp = (combinations_count - (offset + chunk_size));
+  #pragma omp parallel for schedule(dynamic)
+  for (uint64_t i = start_from; i < chunk_count; i++) {
+    int device = omp_get_thread_num();
 
-    uint64_t residual_chunk_size = comp < 0 ? combinations_count - offset : chunk_size;
+    cudaSetDevice(device);
+    cudaStream_t stream;
+    cudaStreamCreate(&stream);
 
-    printf("\n --- CHUNK %" PRIu64 " --- \n\n", i);
+    uint64_t offset = getOffset(i, chunk_size);
+    uint64_t residual_chunk_size = getResidualChunkSize(offset, chunk_size, combinations_count);
 
-    start_kernel(offset, residual_chunk_size, signal_size, base);
+    printf(" --- Device %d: CHUNK %" PRIu64 " --- \n", device, i);
+
+    float *dev_c = start_kernel_async(
+      stream,
+      offset,
+      residual_chunk_size,
+      signal_size,
+      base
+    );
+
+    cudaStreamSynchronize(stream);
+
+    uint64_t result = thrust::min_element(thrust::device.on(stream), dev_c, dev_c + residual_chunk_size) - dev_c;
+
+    float test;
+
+    cudaMemcpyAsync(&test, dev_c + result, sizeof(float), cudaMemcpyDeviceToHost, stream);
+
+    cout << "device: " << device << endl;
+    cout << "akf: " << test << endl;
+    cout << "signal: " << result + offset << endl;
+
+    cudaFree(dev_c);
   }
 }

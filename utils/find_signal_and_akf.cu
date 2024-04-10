@@ -5,10 +5,10 @@
 
 using namespace std;
 
-#define N 30
+#define N 33
 #define PHASE 180
 #define BASE (360 / PHASE)
-#define SIGNAL 32953806
+#define SIGNAL 1352711782
 #define DOPPLER 0
 
 
