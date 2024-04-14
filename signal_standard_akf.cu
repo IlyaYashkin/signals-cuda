@@ -20,20 +20,18 @@
 
 using namespace std;
 
-#define N 40
+#define N 30
 #define PHASE 180
 #define BASE (360 / PHASE)
 
-#define CHUNK_SIZE_IN_BYTES 5368709120
-// #define CHUNK_SIZE_IN_BYTES 4096
+// #define CHUNK_SIZE_IN_BYTES 5368709120
+#define CHUNK_SIZE_IN_BYTES 536870912
 
 struct radar_signal
 {
   float akf;
   uint64_t signal;
 };
-
-radar_signal best_signal = { akf: FLT_MAX };
 
 uint64_t getResidualChunkSize(uint64_t offset, uint64_t chunk_size, uint64_t combinations_count)
 {
@@ -74,7 +72,8 @@ float* start_kernel_async(
 int main()
 {
   uint64_t combinations_count = getCombinationsCount(N, BASE);
-  uint64_t chunk_size = CHUNK_SIZE_IN_BYTES / sizeof(float);
+  size_t chunk_size_b = CHUNK_SIZE_IN_BYTES;
+  uint64_t chunk_size = chunk_size_b / sizeof(float);
   uint32_t signal_size = N;
   uint32_t base = BASE;
   uint64_t chunk_start = 0;
@@ -90,6 +89,8 @@ int main()
   int device_count;
   cudaGetDeviceCount(&device_count);
   omp_set_num_threads(device_count);
+
+  radar_signal best_signal = { akf: FLT_MAX };
 
   while (chunk_start < chunk_count) {
     if (chunk_start + chunk_step > chunk_count) {
@@ -145,7 +146,7 @@ int main()
       best_signal = chunk_best_signal;
 
       ostringstream file_name;
-      file_name << "./signals/base" << base << "_signal" << signal_size << endl;
+      file_name << "./found_signals/akf/base" << base << "_signal" << signal_size << endl;
 
       ofstream signal_file(file_name.str());
 

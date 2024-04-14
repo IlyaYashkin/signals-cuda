@@ -3,5 +3,5 @@ test.exp
 test.lib
 test
 start
-signals
+found_signals
 .vscode

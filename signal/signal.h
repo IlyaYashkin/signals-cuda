@@ -14,7 +14,8 @@ __global__ void kernel_doppler(
   float *c,
   uint64_t offset,
   uint32_t signal_size,
-  uint32_t base
+  uint32_t base,
+  float doppler_shift
 );
 
 #endif

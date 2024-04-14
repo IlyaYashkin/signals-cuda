@@ -95,6 +95,34 @@ __device__ float findAkf(
   return sqrtf(sum.x * sum.x + sum.y * sum.y);
 }
 
+__device__ float findAmbf(
+  float2* signal,
+  uint32_t signal_size,
+  float doppler_shift
+)
+{
+  float2 sum = {0.0, 0.0};
+
+  for (int i = 0; i + threadIdx.x < signal_size; i++) {
+
+    float x = (2 * CUDART_PI * i * doppler_shift) / signal_size;
+
+    float2 a = {
+      signal[threadIdx.x + i].x * signal[i].x - signal[threadIdx.x + i].y * -signal[i].y,
+      signal[threadIdx.x + i].x * -signal[i].y + signal[threadIdx.x + i].y * signal[i].x
+    };
+
+    float2 b = {
+      cosf(x),
+      sinf(x)
+    };
+
+    sum.x += a.x * b.x - a.y * b.y;
+    sum.y += a.x * b.y + a.y * b.x;
+  }
+
+  return sqrtf(sum.x * sum.x + sum.y * sum.y);
+}
 
 /**
  * Поиск оптимального сигнала
@@ -182,7 +210,8 @@ __global__ void kernel_doppler(
   float *c,
   uint64_t offset,
   uint32_t signal_size,
-  uint32_t base
+  uint32_t base,
+  float doppler_shift
 )
 {
   extern __shared__ float2 s[];
@@ -199,17 +228,17 @@ __global__ void kernel_doppler(
 
   __syncthreads();
 
-  float akf = findAkf(signal, signal_size);
+  float ambf = findAmbf(signal, signal_size, doppler_shift);
 
   __syncthreads();
 
   float2 *akf_arr = (float2*)&s[base + signal_size];
 
   if (threadIdx.x < signal_size) {
-    signal[threadIdx.x].x = akf;
+    signal[threadIdx.x].x = ambf;
     signal[threadIdx.x].y = threadIdx.x;
 
-    akf_arr[threadIdx.x].x = akf;
+    akf_arr[threadIdx.x].x = ambf;
     akf_arr[threadIdx.x].y = threadIdx.x;
   }
 
