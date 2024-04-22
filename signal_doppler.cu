@@ -156,7 +156,7 @@ int main()
         best_signal = chunk_best_signal;
 
         ostringstream file_name;
-        file_name << "./found_signals/ambiguity/base" << base << "_signal" << signal_size << endl;
+        file_name << "./found_signals/ambiguity/base" << base << "_signal" << signal_size << "_shift" << doppler_shift << endl;
 
         ofstream signal_file(file_name.str());
 
